@@ -1,0 +1,5 @@
+# Default values for SaaS API
+ms: "vault"
+
+vault:
+  TEST: "Tanmoy"

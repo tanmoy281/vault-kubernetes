@@ -1,0 +1,61 @@
+kind: ConfigMap
+apiVersion: v1
+metadata:
+  name: vault
+  labels:
+    app: vault
+data:
+  TEST: "Tanmoy"
+---
+apiVersion: extensions/v1beta1
+kind: Deployment
+metadata:
+  labels:
+    app: vault
+  name: vault
+spec:
+  replicas: 1
+  template:
+    metadata:
+      labels:
+        app: vault
+    spec:
+      serviceAccountName: default
+      containers:
+      - image: vault-tanmoy:1.1
+        imagePullPolicy: Never
+        name: vault
+        ports:
+        - containerPort: 8200
+          name: vaultport
+          protocol: TCP
+        - containerPort: 8201
+          name: vaultapiport
+        envFrom:
+        - configMapRef:
+            name: vault
+        securityContext:
+         capabilities:
+           add:
+             - IPC_LOCK
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: vault-elb-int
+  labels:
+    app: vault
+spec:
+  ports:
+    - name: vault
+      port: 8200
+      targetPort: 8200
+    - name: vaultclusterapi
+      port: 8201
+      targetPort: 8201
+  selector:
+    app: vault
+  type: LoadBalancer
+  externalIPs:
+  - 192.168.0.10
+---

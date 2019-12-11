@@ -1,0 +1,1 @@
+docker image build . --tag vault-tanmoy:1.1
