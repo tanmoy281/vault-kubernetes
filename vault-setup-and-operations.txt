@@ -1,0 +1,187 @@
+1. Create storageclass (hostpath is default and automatically created. in order to work the default hostpath properly, you need to enable c drive as shared drive for docker for windows)
+2. Create PersistentVolumeClaim using pvc.yaml(kubectl create -f pvc.yaml). It will automatically create the persistent volume(pv) and bind.
+3. deploy vault image using helm
+4. open http://127.0.0.1:8200/ui/vault/auth?with=token in browser and initialize vault. Keep all unseal keys and root token safely. every time vault gets restarted , it will be sealed. then we will require the unseal keys to unseal the vault.
+5. Unseal vault from link above in browser using the unseal keys.
+
+---now vault is ready to use---
+
+7. get kubernetes service account name:
+kubectl get serviceaccounts
+
+o/p
+
+NAME               SECRETS   AGE
+default            1         1y
+
+
+8. get the details of the service account(here using default service account)
+kubectl get serviceaccounts/default -o yaml
+
+in output of above command you will get a secret name
+
+o/p:
+
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+ creationTimestamp: 2018-09-02T19:53:38Z
+ name: default
+ namespace: default
+ resourceVersion: "2994"
+ selfLink: /api/v1/namespaces/default/serviceaccounts/default
+ uid: e2a8221f-aee9-11e8-8973-0e960471aae8
+secrets:
+- name: default-token-qnmlf
+
+9. get the token for the secret name retrieved by above command
+kubectl describe secrets/default-token-qnmlf  --here default-token-qnmlf is the secret name of the service account.
+   
+in output you will get k8s service account token which can be used for kubernetes login in later steps.
+
+10. Enable the Kubernetes auth method in vault
+create file payload1.json with below json
+{"type":"kubernetes"}
+curl  --request POST --header "X-Vault-Token: s.6AIx6wCemwv6wx84IsDNfyW6" --data @payload1.json http://127.0.0.1:8200/v1/sys/auth/kubernetes
+    kubernetes enabled at /kubernetes path
+11. configure Vault to talk to Kubernetes
+
+11.1 get kubernetes api host ip and open a proxy to localhost:8080 :https://kubernetes.io/docs/tasks/access-application-cluster/access-cluster/
+11.2 call below curl to configure Vault to talk to Kubernetes
+
+create file payload.json with below json
+{
+ "kubernetes_host": "https://kubernetes",
+ "kubernetes_ca_cert": <kubectl exec to vault pod and cat  /var/run/secrets/kubernetes.io/serviceaccount/ca.crt, now make the cert one line by following this answer: https://stackoverflow.com/a/14580203/2054147>
+}
+
+curl --header "X-Vault-Token: <vault root token from step 4>" --request POST --data @payload.json http://127.0.0.1:8200/v1/auth/kubernetes/config
+
+    (by using proxy : curl --request POST --header "X-Vault-Token: s.6AIx6wCemwv6wx84IsDNfyW6" --data @payload.json http://localhost:8080/api/v1/namespaces/default/services/vault-elb-int:8200/proxy/v1/auth/kubernetes/config, before running this , need to run kubectl proxy --port:8080)
+12. create a policy in vault:
+    craete file policy.json with below content
+{
+ "policy": "{
+\"path\": {
+ 
+ \"database\/*\":{\"capabilities\":[\"create\",\"read\", \"update\", \"delete\", \"list\", \"sudo\"]},
+}
+ }"
+}
+
+curl --header "X-Vault-Token: <vault root token from step 4>" --request PUT --data @policy.json http://127.0.0.1:8200/v1/sys/policies/acl/tanmoypolicy
+
+13. Create a named kubernetes role (like creating a user) with the newly created policy in step 12.
+
+create a file payload2.json with below content
+
+{
+ "bound_service_account_names": "default",
+ "bound_service_account_namespaces": "default",
+ "policies": [
+"tanmoypolicy"
+ ]
+}
+
+here bound_service_account_names is the name of kubernetes service account, for this example here it is 'default'
+
+curl --header "X-Vault-Token: <vault root token from step 4>" --request POST --data @payload2.json http://127.0.0.1:8200/v1/auth/kubernetes/role/tanmoy-role
+
+14. Check if newly created role works fine by login into vault using kubernetes auth
+
+create a file payload3.json with below content
+payload3.json
+{
+ "role": "tanmoy-role",
+ "jwt": "<k8s service account token from step 9>"
+}
+here role is the newly created role in step 13.
+
+curl --request POST --data @payload3.json http://127.0.0.1:8200/v1/auth/kubernetes/login
+
+   you should get the token for the tanmoy-role using which you can access vault paths for the policies configured for this role. If you try to access different path which is not configured by the policies of this role, you will get 'permission denied' error.
+
+===========Now as we have created role for authentication in vault, we can create static and dynamic secrets=======
+
+15. Create mongo dynamic secret for the role 'tanmoy-role' created above for k8s auth.
+
+call the curl requests in git bash:
+
+15.1 enable datbase engine in /database path:
+
+curl -L --silent --show-error --header "X-Vault-Token: vault root token from step 4" --header "Content-Type: application/json"  --request POST --data '{"type":"database","config":{"default_lease_ttl":"1h","max_lease_ttl":"4h","force_no_cache":false}}' 'http://127.0.0.1:8200/v1/sys/mounts/database'
+
+15.2 Configure mongodb-database plugin
+
+curl --header "X-Vault-Token: vault root token from step 4" --request POST --data '{"plugin_name":"mongodb-database-plugin","allowed_roles":"*","connection_url":"mongodb://{{username}}:{{password}}@localhost:27017/admin?ssl=false","write_concern":"{ \"wmode\": \"majority\", \"wtimeout\": 5000 }","username":"myUserAdmin","password":"test"}' http://127.0.0.1:8200/v1/database/config/mongodb
+
+15.3 Create a mongo role in mongodb( for this step, you have to deploy mongo pod)
+15.4 add the mongo role created in previous step to vault
+
+==========================static secret kv======================
+
+16. create a kubernetes role which will have access to /secret path
+
+16.1 create a policy in vault for /secret path access:
+    create file policy1.json with below content
+{
+ "policy": "{
+\"path\": {
+ 
+ \"secret\/*\":{\"capabilities\":[\"create\",\"read\", \"update\", \"delete\", \"list\", \"sudo\"]},
+}
+ }"
+}
+
+curl --header "X-Vault-Token: <vault root token from step 4>" --request PUT --data @policy1.json http://127.0.0.1:8200/v1/sys/policies/acl/tanmoysecretpolicy
+
+this will create a policy named 'tanmoysecretpolicy' with read/write access to '/secret' path.
+
+16.2. Create a named kubernetes role (like creating a user) with the newly created policy above.
+
+create a file payload4.json with below content
+
+{
+ "bound_service_account_names": "default",
+ "bound_service_account_namespaces": "default",
+ "policies": [
+"tanmoysecretpolicy"
+ ]
+}
+
+here bound_service_account_names is the name of kubernetes service account, for this example here it is 'default'. you can create a kubernetes service account as well.
+
+curl --header "X-Vault-Token: <vault root token from step 4>" --request POST --data @payload4.json http://127.0.0.1:8200/v1/auth/kubernetes/role/tanmoy-secret-role
+
+This will create a kubernetes role named 'tanmoy-secret-role' with the policy 'tanmoysecretpolicy'. This role has read/write access to /secret as it it created using 'tanmoysecretpolicy'.
+
+16.3. Check if newly created role works fine by login into vault using kubernetes auth
+
+create a file payload5.json with below content
+payload5.json
+{
+ "role": "tanmoy-secret-role",
+ "jwt": "<k8s service account token from step 9>"
+}
+here role is the newly created role in step 16.2
+
+curl --request POST --data @payload5.json http://127.0.0.1:8200/v1/auth/kubernetes/login
+
+you will get client_token as output.
+
+16.4. Create kv secret keys
+
+ > enable kv in /secret path(that is the default path for kv)
+
+curl -L --silent --show-error --header "X-Vault-Token: <vault root token from step 4>" --header "Content-Type: application/json"  --request POST --data '{"type":"kv","config":{"default_lease_ttl":"1h","max_lease_ttl":"4h","force_no_cache":false}}' 'http://127.0.0.1:8200/v1/sys/mounts/secret'
+
+ > insert secrets in path /tanmoy under /secret:
+
+curl --header "X-Vault-Token: <client_token from step above 16.3 >" --request POST --data '{"password1":"abcd","password2":"efgh"}' http://127.0.0.1:8200/v1/secret/tanmoy
+
+16.5. retrieve KV secret
+
+curl --header "X-Vault-Token: <client_token from step above 16.3 >" http://127.0.0.1:8200/v1/secret/tanmoy
+
+you will retrieve the secrets inserted into vault in step above 16.4
+=================================END====================================
