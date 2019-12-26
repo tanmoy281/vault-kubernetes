@@ -5,3 +5,5 @@ docker engine version: 19.03.5
 tested in docker desktop (for windows) kubernetes version: 1.14.8  
 helm version: 3.0.1  
 Hashicorp Vault version: 1.3.0 (configurable)  
+
+Read and follow vault-setup-and-operations.txt
