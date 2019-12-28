@@ -5,7 +5,7 @@ metadata:
   labels:
     app: vault
 data:
-  TEST: "Tanmoy"
+  TEST: {{ .Values.vault.TEST | quote }}
 ---
 apiVersion: extensions/v1beta1
 kind: Deployment
@@ -22,7 +22,7 @@ spec:
     spec:
       serviceAccountName: default
       containers:
-      - image: vault-tanmoy:1.1
+      - image: vault-snapshot:1.1-withvolume
         imagePullPolicy: Never
         name: vault
         ports:
@@ -34,10 +34,17 @@ spec:
         envFrom:
         - configMapRef:
             name: vault
+        volumeMounts:
+          - mountPath: /vault/storage
+            name: vaultstorage
         securityContext:
          capabilities:
            add:
              - IPC_LOCK
+      volumes:
+        - name: vaultstorage
+          persistentVolumeClaim:
+            claimName: vault-vol
 ---
 apiVersion: v1
 kind: Service
