@@ -5,7 +5,7 @@ metadata:
   labels:
     app: vault
 data:
-  TEST: {{ .Values.vault.TEST | quote }}
+  TEST: "Tanmoy"
 ---
 apiVersion: extensions/v1beta1
 kind: Deployment
@@ -22,7 +22,7 @@ spec:
     spec:
       serviceAccountName: default
       containers:
-      - image: vault-snapshot:1.1-withvolume
+      - image: vault-tanmoy:1.1
         imagePullPolicy: Never
         name: vault
         ports:
